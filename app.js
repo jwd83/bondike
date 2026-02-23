@@ -47,6 +47,101 @@ const state = {
   hovered: null,
 };
 
+const animationState = {
+  items: new Map(),
+  clockMs: 0,
+  lastPerfMs: null,
+  rafId: 0,
+  prefersReducedMotion:
+    window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false,
+};
+
+function easeOutCubic(t) {
+  return 1 - (1 - t) ** 3;
+}
+
+function syncAnimationClockFromPerf(now = performance.now()) {
+  if (animationState.lastPerfMs == null) {
+    animationState.lastPerfMs = now;
+    if (animationState.clockMs === 0) animationState.clockMs = now;
+    return;
+  }
+  const delta = Math.max(0, Math.min(50, now - animationState.lastPerfMs));
+  animationState.clockMs += delta;
+  animationState.lastPerfMs = now;
+}
+
+function pruneFinishedAnimations() {
+  const now = animationState.clockMs;
+  for (const [cardId, anim] of animationState.items) {
+    if (now >= anim.startMs + anim.durationMs) {
+      animationState.items.delete(cardId);
+    }
+  }
+}
+
+function isCardAnimating(cardId) {
+  pruneFinishedAnimations();
+  return animationState.items.has(cardId);
+}
+
+function getAnimatedCardPosition(cardId) {
+  const anim = animationState.items.get(cardId);
+  if (!anim) return null;
+  const now = animationState.clockMs;
+  if (now <= anim.startMs) return { x: anim.fromX, y: anim.fromY };
+  const t = Math.min(1, (now - anim.startMs) / anim.durationMs);
+  const e = easeOutCubic(t);
+  return {
+    x: anim.fromX + (anim.toX - anim.fromX) * e,
+    y: anim.fromY + (anim.toY - anim.fromY) * e,
+  };
+}
+
+function scheduleAnimationFrame() {
+  if (animationState.rafId || animationState.prefersReducedMotion) return;
+  if (animationState.items.size === 0) return;
+  animationState.rafId = window.requestAnimationFrame((ts) => {
+    animationState.rafId = 0;
+    syncAnimationClockFromPerf(ts);
+    pruneFinishedAnimations();
+    render();
+    if (animationState.items.size > 0) scheduleAnimationFrame();
+  });
+}
+
+function queueCardSlide(card, from, to, options = {}) {
+  if (!card || animationState.prefersReducedMotion) return;
+  const durationMs = options.durationMs ?? 210;
+  if (durationMs <= 0) return;
+  animationState.items.set(card.id, {
+    card,
+    faceUp: options.faceUp ?? true,
+    fromX: from.x,
+    fromY: from.y,
+    toX: to.x,
+    toY: to.y,
+    startMs: animationState.clockMs + (options.delayMs ?? 0),
+    durationMs,
+    showDecimal: options.showDecimal ?? false,
+  });
+  scheduleAnimationFrame();
+}
+
+function drawQueuedCardAnimations() {
+  if (animationState.items.size === 0) return;
+  pruneFinishedAnimations();
+  for (const anim of animationState.items.values()) {
+    const pos = getAnimatedCardPosition(anim.card.id);
+    if (!pos) continue;
+    if (anim.faceUp) {
+      drawFaceUpCard(anim.card, pos.x, pos.y, false, anim.showDecimal);
+    } else {
+      drawFaceDownCard(pos.x, pos.y, false);
+    }
+  }
+}
+
 function getInitialOptions() {
   const params = new URLSearchParams(window.location.search);
   const rawSeed = params.get("seed");
@@ -136,6 +231,11 @@ function createDeck() {
 }
 
 function newGame(seed = Date.now()) {
+  animationState.items.clear();
+  if (animationState.rafId) {
+    cancelAnimationFrame(animationState.rafId);
+    animationState.rafId = 0;
+  }
   state.seed = seed;
   const rng = mulberry32(seed);
   const deck = shuffle(createDeck(), rng);
@@ -268,9 +368,11 @@ function moveSelectedToTableau(targetCol) {
   if (cards.length === 0) return false;
   if (!canPlaceOnTableau(cards[0], targetCol)) return false;
 
+  const fromPositions = captureSelectedCardPositions();
   const source = state.selected.source;
   const moved = removeSelectedFromSource();
   attachToTableau(targetCol, moved);
+  queueSelectedMoveAnimationToTableau(targetCol, moved, fromPositions);
   state.moves += 1;
   if (source === "foundation") state.score -= 10;
   else state.score += moved.length;
@@ -287,8 +389,10 @@ function moveSelectedToFoundation(index) {
   if (cards.length !== 1) return false;
   if (!canPlaceOnFoundation(cards[0], index)) return false;
 
+  const fromPositions = captureSelectedCardPositions();
   const moved = removeSelectedFromSource();
   attachToFoundation(index, moved);
+  queueSelectedMoveAnimationToFoundation(index, moved, fromPositions);
   state.moves += 1;
   state.score += 10;
   state.lastAction = `Move to foundation ${index + 1}`;
@@ -351,7 +455,13 @@ function drawFromStock() {
   state.drag = null;
   state.hovered = null;
   if (state.stock.length > 0) {
+    const drawn = state.stock[state.stock.length - 1];
     state.waste.push(state.stock.pop());
+    const { stockRect, wasteRect } = getTopRects();
+    queueCardSlide(drawn, { x: stockRect.x, y: stockRect.y }, { x: wasteRect.x, y: wasteRect.y }, {
+      faceUp: true,
+      durationMs: 190,
+    });
     state.moves += 1;
     state.lastAction = "Draw";
     state.message = `Drew ${cardLabel(topWasteCard())}`;
@@ -856,6 +966,64 @@ function selectionTopLeft(selection) {
   return null;
 }
 
+function captureSelectedCardPositions() {
+  if (!state.selected) return [];
+  if (state.selected.source === "waste") {
+    const card = topWasteCard();
+    const origin = selectionTopLeft(state.selected);
+    return card && origin ? [{ card, x: origin.x, y: origin.y, faceUp: true }] : [];
+  }
+  if (state.selected.source === "foundation") {
+    const card = topFoundationCard(state.selected.foundation);
+    const origin = selectionTopLeft(state.selected);
+    return card && origin ? [{ card, x: origin.x, y: origin.y, faceUp: true }] : [];
+  }
+  if (state.selected.source === "tableau") {
+    const pile = state.tableau[state.selected.col];
+    const x = tableauColumnX(state.selected.col);
+    const out = [];
+    for (let i = state.selected.index; i < pile.length; i += 1) {
+      const y = tableauCardYForIndex(state.selected.col, i);
+      out.push({ card: pile[i].card, x, y, faceUp: !!pile[i].faceUp });
+    }
+    return out;
+  }
+  return [];
+}
+
+function queueSelectedMoveAnimationToTableau(targetCol, movedCards, fromPositions) {
+  if (!movedCards.length || !fromPositions.length) return;
+  const pile = state.tableau[targetCol];
+  const startIndex = pile.length - movedCards.length;
+  for (let i = 0; i < movedCards.length; i += 1) {
+    const card = movedCards[i];
+    const from = fromPositions.find((p) => p.card.id === card.id);
+    if (!from) continue;
+    const to = {
+      x: tableauColumnX(targetCol),
+      y: tableauCardYForIndex(targetCol, startIndex + i),
+    };
+    queueCardSlide(card, from, to, {
+      faceUp: true,
+      durationMs: 210 + i * 18,
+      delayMs: i * 12,
+    });
+  }
+}
+
+function queueSelectedMoveAnimationToFoundation(targetFoundation, movedCards, fromPositions) {
+  if (movedCards.length !== 1 || !fromPositions.length) return;
+  const { foundations } = getTopRects();
+  const rect = foundations[targetFoundation];
+  if (!rect) return;
+  queueCardSlide(
+    movedCards[0],
+    fromPositions[0],
+    { x: rect.x, y: rect.y },
+    { faceUp: true, durationMs: 220 }
+  );
+}
+
 function drawCard(card, x, y, opts) {
   if (opts.faceUp) {
     drawFaceUpCard(card, x, y, opts.selected, opts.showDecimal);
@@ -1003,13 +1171,15 @@ function drawTopRow() {
   if (waste) {
     const wasteSelected = state.selected && state.selected.source === "waste";
     const wasteHovered = state.hovered && state.hovered.source === "waste";
-    drawFaceUpCard(
-      waste,
-      wasteRect.x,
-      wasteRect.y,
-      wasteSelected,
-      wasteSelected || wasteHovered
-    );
+    if (!isCardAnimating(waste.id)) {
+      drawFaceUpCard(
+        waste,
+        wasteRect.x,
+        wasteRect.y,
+        wasteSelected,
+        wasteSelected || wasteHovered
+      );
+    }
   }
 
   for (let i = 0; i < 4; i += 1) {
@@ -1023,13 +1193,15 @@ function drawTopRow() {
         state.hovered &&
         state.hovered.source === "foundation" &&
         state.hovered.foundation === i;
-      drawFaceUpCard(
-        card,
-        foundations[i].x,
-        foundations[i].y,
-        foundationSelected,
-        foundationSelected || foundationHovered
-      );
+      if (!isCardAnimating(card.id)) {
+        drawFaceUpCard(
+          card,
+          foundations[i].x,
+          foundations[i].y,
+          foundationSelected,
+          foundationSelected || foundationHovered
+        );
+      }
     }
   }
 }
@@ -1043,11 +1215,13 @@ function drawTableau() {
     let y = TABLEAU_Y;
     for (let i = 0; i < pile.length; i += 1) {
       const entry = pile[i];
-      drawCard(entry.card, x, y, {
-        faceUp: entry.faceUp,
-        selected: isSelectedTableauEntry(col, i),
-        showDecimal: isSelectedTableauEntry(col, i) || isHoveredTableauEntry(col, i),
-      });
+      if (!isCardAnimating(entry.card.id)) {
+        drawCard(entry.card, x, y, {
+          faceUp: entry.faceUp,
+          selected: isSelectedTableauEntry(col, i),
+          showDecimal: isSelectedTableauEntry(col, i) || isHoveredTableauEntry(col, i),
+        });
+      }
       if (i < pile.length - 1) y += entry.faceUp ? FACE_UP_OFFSET : FACE_DOWN_OFFSET;
     }
   }
@@ -1205,6 +1379,7 @@ function render() {
   drawHeader();
   drawTopRow();
   drawTableau();
+  drawQueuedCardAnimations();
   drawDragPreview();
   drawFooter();
   if (state.mode === "menu") drawMenuOverlay();
@@ -1412,10 +1587,12 @@ function renderGameToText() {
 
 window.render_game_to_text = renderGameToText;
 window.advanceTime = (ms = 16) => {
-  const steps = Math.max(1, Math.round(ms / (1000 / 60)));
-  for (let i = 0; i < steps; i += 1) {
-    // No simulation step needed; keep deterministic hook for test tooling.
+  if (animationState.lastPerfMs == null && animationState.clockMs === 0) {
+    syncAnimationClockFromPerf(performance.now());
   }
+  animationState.clockMs += Math.max(0, ms);
+  animationState.lastPerfMs = performance.now();
+  pruneFinishedAnimations();
   render();
 };
 window.binaryKlondike = {

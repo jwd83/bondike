@@ -16,4 +16,7 @@ Original prompt: review this seed prompt and build my binary solitaire app
 - Fixed intro formatting issues (CTA/control text clipping/wrapping) after visual inspection and follow-up patch.
 - Fixed fullscreen behavior by fullscreening the app shell (not only canvas) and adding responsive canvas presentation sizing + button state updates.
 - Verified fullscreen interaction path still works by entering fullscreen and drawing from stock (state changed to `moves:1`, `waste:1`).
+- Hid on-card decimal ranks by default; they now appear only on hover, selection, and drag previews.
+- Added slide-into-place card animations for stock draws and legal card moves (tableau/foundation), with easing and reduced-motion respect.
+- Updated `advanceTime(ms)` to progress animation tweens for deterministic automated captures.
 - TODO (optional): add multi-card auto-complete animation and touch/pointer-event support for mobile drag interactions.
