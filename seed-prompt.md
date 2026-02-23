@@ -1,0 +1,2 @@
+i'd like to make a version of klondike solitaire for the web browser where the cards are represnety by a binary nibble. the cards values can be show in filled/empty pips and/or 1s and 0s. i'd like to use the font in this folder for the text. cards should start at 0001 for ace and end at 1101 13 for king. cards should have suit and their binary number. this font face includes glpyhs for the suits.
+
