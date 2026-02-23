@@ -12,4 +12,8 @@ Original prompt: review this seed prompt and build my binary solitaire app
 - Updated card face layout: centered the upper decimal rank and upper bit-pip row.
 - Added mouse drag-and-drop interactions (drag tableau runs / waste / foundation tops to legal targets) while preserving click-to-select/click-to-move behavior.
 - Verified click regressions still pass and validated a deterministic drag move (seed `12345`) via Playwright mouse drag sequence.
+- Performed full UI/visual pass: upgraded page chrome, stage framing, HUD chips, board background, and redesigned intro overlay with cleaner typography/layout.
+- Fixed intro formatting issues (CTA/control text clipping/wrapping) after visual inspection and follow-up patch.
+- Fixed fullscreen behavior by fullscreening the app shell (not only canvas) and adding responsive canvas presentation sizing + button state updates.
+- Verified fullscreen interaction path still works by entering fullscreen and drawing from stock (state changed to `moves:1`, `waste:1`).
 - TODO (optional): add multi-card auto-complete animation and touch/pointer-event support for mobile drag interactions.

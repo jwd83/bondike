@@ -10,20 +10,25 @@
     <main class="app-shell">
       <header class="toolbar">
         <div class="title-block">
+          <p class="eyebrow">A solitaire experiment</p>
           <h1>Binary Klondike</h1>
-          <p>Klondike solitaire with 4-bit ranks (Ace = 0001, King = 1101)</p>
+          <p>Klondike with 4-bit ranks using the local APL386 font and suit glyphs.</p>
         </div>
         <div class="toolbar-actions">
           <button id="new-game-btn" type="button">New Game</button>
           <button id="auto-btn" type="button">Auto to Foundation</button>
+          <button id="fullscreen-btn" type="button">Fullscreen</button>
         </div>
       </header>
-      <canvas
-        id="game-canvas"
-        width="1200"
-        height="820"
-        aria-label="Binary Klondike game board"
-      ></canvas>
+      <section class="canvas-stage" aria-label="Game board stage">
+        <div class="stage-glow" aria-hidden="true"></div>
+        <canvas
+          id="game-canvas"
+          width="1200"
+          height="820"
+          aria-label="Binary Klondike game board"
+        ></canvas>
+      </section>
     </main>
     <script type="module" src="./app.js"></script>
   </body>

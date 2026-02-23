@@ -1,9 +1,14 @@
 const canvas = document.getElementById("game-canvas");
 const ctx = canvas.getContext("2d");
+const appShell = document.querySelector(".app-shell");
+const canvasStage = document.querySelector(".canvas-stage");
+const toolbarEl = document.querySelector(".toolbar");
 const newGameBtn = document.getElementById("new-game-btn");
 const autoBtn = document.getElementById("auto-btn");
+const fullscreenBtn = document.getElementById("fullscreen-btn");
 
 const BOARD = { w: canvas.width, h: canvas.height };
+const BOARD_ASPECT = BOARD.w / BOARD.h;
 const CARD = { w: 90, h: 126, r: 12 };
 const TOP_Y = 82;
 const TABLEAU_Y = 222;
@@ -39,6 +44,7 @@ const state = {
   seed: 0,
   wonAt: null,
   drag: null,
+  hovered: null,
 };
 
 function getInitialOptions() {
@@ -48,6 +54,51 @@ function getInitialOptions() {
   const seed = Number.isFinite(parsedSeed) ? Math.trunc(parsedSeed) : null;
   const autostart = params.get("autostart") === "1";
   return { seed, autostart };
+}
+
+function isAppFullscreen() {
+  return document.fullscreenElement === appShell;
+}
+
+function resizeCanvasPresentation() {
+  if (!canvasStage) return;
+
+  const stageRect = canvasStage.getBoundingClientRect();
+  const stageStyle = window.getComputedStyle(canvasStage);
+  const padX =
+    parseFloat(stageStyle.paddingLeft || "0") +
+    parseFloat(stageStyle.paddingRight || "0");
+  const padY =
+    parseFloat(stageStyle.paddingTop || "0") +
+    parseFloat(stageStyle.paddingBottom || "0");
+
+  let availableW = Math.max(260, stageRect.width - padX);
+  let availableH = Infinity;
+
+  if (isAppFullscreen()) {
+    const toolbarH = toolbarEl?.getBoundingClientRect().height ?? 0;
+    const shellStyle = window.getComputedStyle(appShell);
+    const shellPadY =
+      parseFloat(shellStyle.paddingTop || "0") +
+      parseFloat(shellStyle.paddingBottom || "0");
+    const gap = parseFloat(shellStyle.rowGap || shellStyle.gap || "0") || 0;
+    availableH = Math.max(220, window.innerHeight - toolbarH - shellPadY - gap - padY - 2);
+  }
+
+  let displayW = Math.min(BOARD.w, availableW);
+  let displayH = displayW / BOARD_ASPECT;
+  if (displayH > availableH) {
+    displayH = availableH;
+    displayW = displayH * BOARD_ASPECT;
+  }
+
+  canvas.style.width = `${Math.floor(displayW)}px`;
+  canvas.style.height = `${Math.floor(displayH)}px`;
+}
+
+function updateFullscreenButtonLabel() {
+  if (!fullscreenBtn) return;
+  fullscreenBtn.textContent = isAppFullscreen() ? "Exit Fullscreen" : "Fullscreen";
 }
 
 function mulberry32(seed) {
@@ -95,6 +146,7 @@ function newGame(seed = Date.now()) {
   state.tableau = [[], [], [], [], [], [], []];
   state.selected = null;
   state.drag = null;
+  state.hovered = null;
   state.moves = 0;
   state.score = 0;
   state.mode = "playing";
@@ -254,6 +306,30 @@ function selectionsEqual(a, b) {
   return false;
 }
 
+function hoverRefFromHit(hit) {
+  if (!hit) return null;
+  if (hit.kind === "waste" && topWasteCard()) return { source: "waste" };
+  if (hit.kind === "foundation" && topFoundationCard(hit.index)) {
+    return { source: "foundation", foundation: hit.index };
+  }
+  if (hit.kind === "tableauCard") {
+    const pile = state.tableau[hit.col];
+    const entry = pile[hit.index];
+    if (entry?.faceUp) return { source: "tableau", col: hit.col, index: hit.index };
+  }
+  return null;
+}
+
+function setHoveredCard(nextHover, rerender = true) {
+  const same =
+    (state.hovered === null && nextHover === null) ||
+    (state.hovered && nextHover && selectionsEqual(state.hovered, nextHover));
+  if (same) return false;
+  state.hovered = nextHover;
+  if (rerender) render();
+  return true;
+}
+
 function trySelectSource(nextSel) {
   if (!nextSel) return;
   if (state.selected && selectionsEqual(state.selected, nextSel)) {
@@ -273,6 +349,7 @@ function drawFromStock() {
   if (state.mode !== "playing") return;
   state.selected = null;
   state.drag = null;
+  state.hovered = null;
   if (state.stock.length > 0) {
     state.waste.push(state.stock.pop());
     state.moves += 1;
@@ -296,6 +373,7 @@ function checkWin() {
     state.wonAt = Date.now();
     state.selected = null;
     state.drag = null;
+    state.hovered = null;
     state.message = "Win: all foundations completed.";
   }
 }
@@ -602,6 +680,24 @@ function roundRectPath(x, y, w, h, r) {
   ctx.closePath();
 }
 
+function fillWrappedText(text, x, y, maxWidth, lineHeight) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  let line = "";
+  let cy = y;
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(next).width > maxWidth) {
+      ctx.fillText(line, x, cy);
+      line = word;
+      cy += lineHeight;
+    } else {
+      line = next;
+    }
+  }
+  if (line) ctx.fillText(line, x, cy);
+  return cy + lineHeight;
+}
+
 function drawSlot(x, y, label, accent = false) {
   ctx.save();
   roundRectPath(x, y, CARD.w, CARD.h, CARD.r);
@@ -666,7 +762,7 @@ function drawCardBitsPips(bits, x, y, color) {
   }
 }
 
-function drawFaceUpCard(card, x, y, selected = false) {
+function drawFaceUpCard(card, x, y, selected = false, showDecimal = selected) {
   const fg = card.color === "red" ? "#b73236" : "#1b2f2f";
   const soft = card.color === "red" ? "rgba(183, 50, 54, 0.25)" : "rgba(27, 47, 47, 0.22)";
 
@@ -692,7 +788,11 @@ function drawFaceUpCard(card, x, y, selected = false) {
 
   ctx.font = '14px "APL386", monospace';
   ctx.textAlign = "center";
-  ctx.fillText(String(card.rank), x + CARD.w / 2, y + 31);
+  if (showDecimal) {
+    ctx.globalAlpha = 0.92;
+    ctx.fillText(String(card.rank), x + CARD.w / 2, y + 31);
+    ctx.globalAlpha = 1;
+  }
 
   drawCardBitsPips(bits, x + CARD.w / 2 - 21, y + 52, fg);
 
@@ -716,6 +816,15 @@ function isSelectedTableauEntry(col, index) {
     state.selected.source === "tableau" &&
     state.selected.col === col &&
     index >= state.selected.index
+  );
+}
+
+function isHoveredTableauEntry(col, index) {
+  return (
+    state.hovered &&
+    state.hovered.source === "tableau" &&
+    state.hovered.col === col &&
+    state.hovered.index === index
   );
 }
 
@@ -749,7 +858,7 @@ function selectionTopLeft(selection) {
 
 function drawCard(card, x, y, opts) {
   if (opts.faceUp) {
-    drawFaceUpCard(card, x, y, opts.selected);
+    drawFaceUpCard(card, x, y, opts.selected, opts.showDecimal);
   } else {
     drawFaceDownCard(x, y, opts.selected);
   }
@@ -766,23 +875,36 @@ function drawDragPreview() {
   ctx.save();
   ctx.globalAlpha = 0.95;
   for (let i = 0; i < cards.length; i += 1) {
-    drawFaceUpCard(cards[i], x, y + i * FACE_UP_OFFSET, true);
+    drawFaceUpCard(cards[i], x, y + i * FACE_UP_OFFSET, true, true);
   }
   ctx.restore();
 }
 
 function drawBoardBackground() {
-  const g = ctx.createLinearGradient(0, 0, 0, BOARD.h);
-  g.addColorStop(0, "#1f6a55");
-  g.addColorStop(0.5, "#125041");
-  g.addColorStop(1, "#0c362d");
-  ctx.fillStyle = g;
+  const base = ctx.createLinearGradient(0, 0, 0, BOARD.h);
+  base.addColorStop(0, "#1b6a57");
+  base.addColorStop(0.42, "#145244");
+  base.addColorStop(1, "#0a2f2a");
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, BOARD.w, BOARD.h);
+
+  const glowA = ctx.createRadialGradient(120, 110, 20, 120, 110, 320);
+  glowA.addColorStop(0, "rgba(245, 214, 110, 0.16)");
+  glowA.addColorStop(1, "rgba(245, 214, 110, 0)");
+  ctx.fillStyle = glowA;
+  ctx.fillRect(0, 0, BOARD.w, BOARD.h);
+
+  const glowB = ctx.createRadialGradient(1020, 120, 20, 1020, 120, 340);
+  glowB.addColorStop(0, "rgba(114, 210, 188, 0.14)");
+  glowB.addColorStop(1, "rgba(114, 210, 188, 0)");
+  ctx.fillStyle = glowB;
   ctx.fillRect(0, 0, BOARD.w, BOARD.h);
 
   ctx.save();
-  ctx.globalAlpha = 0.08;
-  ctx.strokeStyle = "#dcf0e6";
-  for (let i = -BOARD.h; i < BOARD.w; i += 20) {
+  ctx.globalAlpha = 0.065;
+  ctx.strokeStyle = "#dff3eb";
+  ctx.lineWidth = 1;
+  for (let i = -BOARD.h; i < BOARD.w + 40; i += 18) {
     ctx.beginPath();
     ctx.moveTo(i, 0);
     ctx.lineTo(i + BOARD.h, BOARD.h);
@@ -790,21 +912,74 @@ function drawBoardBackground() {
   }
   ctx.restore();
 
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
-  ctx.fillRect(0, 0, BOARD.w, 56);
+  ctx.save();
+  ctx.globalAlpha = 0.035;
+  ctx.fillStyle = "#ffffff";
+  for (let i = 0; i < 900; i += 1) {
+    const x = (i * 137) % BOARD.w;
+    const y = (i * 83) % BOARD.h;
+    ctx.fillRect(x, y, 1, 1);
+  }
+  ctx.restore();
+
+  const topRail = ctx.createLinearGradient(0, 0, 0, 60);
+  topRail.addColorStop(0, "rgba(3, 10, 10, 0.32)");
+  topRail.addColorStop(1, "rgba(3, 10, 10, 0.12)");
+  ctx.fillStyle = topRail;
+  ctx.fillRect(0, 0, BOARD.w, 60);
+
+  const vignette = ctx.createRadialGradient(
+    BOARD.w / 2,
+    BOARD.h / 2,
+    260,
+    BOARD.w / 2,
+    BOARD.h / 2,
+    BOARD.w * 0.62
+  );
+  vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
+  vignette.addColorStop(1, "rgba(0, 0, 0, 0.22)");
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, BOARD.w, BOARD.h);
 }
 
 function drawHeader() {
-  ctx.fillStyle = "#ecf6e5";
-  ctx.font = '22px "APL386", monospace';
+  ctx.save();
+  roundRectPath(16, 10, BOARD.w - 32, 40, 10);
+  ctx.fillStyle = "rgba(4, 14, 14, 0.22)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(225, 244, 235, 0.08)";
+  ctx.stroke();
+
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  ctx.fillText("BINARY KLONDIKE", 24, 28);
+  ctx.fillStyle = "#edf7ef";
+  ctx.font = '20px "APL386", monospace';
+  ctx.fillText("BINARY KLONDIKE", 26, 30);
 
-  ctx.font = '14px "APL386", monospace';
-  ctx.fillStyle = "rgba(236, 246, 229, 0.78)";
-  const status = `${state.mode.toUpperCase()}  MOVES ${state.moves}  SCORE ${state.score}  STOCK ${state.stock.length}  WASTE ${state.waste.length}`;
-  ctx.fillText(status, 280, 28);
+  const chips = [
+    `MODE ${state.mode.toUpperCase()}`,
+    `MOVES ${state.moves}`,
+    `SCORE ${state.score}`,
+    `STOCK ${state.stock.length}`,
+    `WASTE ${state.waste.length}`,
+  ];
+  let x = 270;
+  for (let i = 0; i < chips.length; i += 1) {
+    const text = chips[i];
+    ctx.font = '13px "APL386", monospace';
+    const w = Math.ceil(ctx.measureText(text).width) + 16;
+    roundRectPath(x, 16, w, 28, 7);
+    ctx.fillStyle =
+      i === 0 ? "rgba(240, 210, 126, 0.14)" : "rgba(255, 255, 255, 0.04)";
+    ctx.fill();
+    ctx.strokeStyle =
+      i === 0 ? "rgba(240, 210, 126, 0.28)" : "rgba(214, 241, 230, 0.12)";
+    ctx.stroke();
+    ctx.fillStyle = i === 0 ? "#f0d27e" : "rgba(236, 246, 229, 0.82)";
+    ctx.fillText(text, x + 8, 30);
+    x += w + 8;
+  }
+  ctx.restore();
 }
 
 function drawTopRow() {
@@ -826,24 +1001,34 @@ function drawTopRow() {
 
   const waste = topWasteCard();
   if (waste) {
+    const wasteSelected = state.selected && state.selected.source === "waste";
+    const wasteHovered = state.hovered && state.hovered.source === "waste";
     drawFaceUpCard(
       waste,
       wasteRect.x,
       wasteRect.y,
-      state.selected && state.selected.source === "waste"
+      wasteSelected,
+      wasteSelected || wasteHovered
     );
   }
 
   for (let i = 0; i < 4; i += 1) {
     const card = topFoundationCard(i);
     if (card) {
+      const foundationSelected =
+        state.selected &&
+        state.selected.source === "foundation" &&
+        state.selected.foundation === i;
+      const foundationHovered =
+        state.hovered &&
+        state.hovered.source === "foundation" &&
+        state.hovered.foundation === i;
       drawFaceUpCard(
         card,
         foundations[i].x,
         foundations[i].y,
-        state.selected &&
-          state.selected.source === "foundation" &&
-          state.selected.foundation === i
+        foundationSelected,
+        foundationSelected || foundationHovered
       );
     }
   }
@@ -861,6 +1046,7 @@ function drawTableau() {
       drawCard(entry.card, x, y, {
         faceUp: entry.faceUp,
         selected: isSelectedTableauEntry(col, i),
+        showDecimal: isSelectedTableauEntry(col, i) || isHoveredTableauEntry(col, i),
       });
       if (i < pile.length - 1) y += entry.faceUp ? FACE_UP_OFFSET : FACE_DOWN_OFFSET;
     }
@@ -869,54 +1055,148 @@ function drawTableau() {
 
 function drawFooter() {
   ctx.save();
-  const footerY = BOARD.h - 74;
-  ctx.fillStyle = "rgba(5, 15, 13, 0.28)";
-  roundRectPath(16, footerY - 12, BOARD.w - 32, 58, 10);
+  const footerY = BOARD.h - 94;
+  roundRectPath(16, footerY - 10, BOARD.w - 32, 78, 12);
+  ctx.fillStyle = "rgba(4, 12, 12, 0.34)";
   ctx.fill();
-  ctx.strokeStyle = "rgba(210, 238, 227, 0.16)";
+  ctx.strokeStyle = "rgba(210, 238, 227, 0.14)";
   ctx.stroke();
 
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
   ctx.font = '14px "APL386", monospace';
-  ctx.fillStyle = "rgba(233, 245, 231, 0.92)";
-  ctx.fillText(state.message, 28, footerY);
+  ctx.fillStyle = "rgba(233, 245, 231, 0.95)";
+  let nextY = fillWrappedText(state.message, 30, footerY, BOARD.w - 60, 18);
+  ctx.font = '12px "APL386", monospace';
   ctx.fillStyle = "rgba(233, 245, 231, 0.7)";
-  ctx.fillText(HINT_TEXT, 28, footerY + 20);
+  fillWrappedText(HINT_TEXT, 30, nextY, BOARD.w - 60, 16);
   ctx.restore();
 }
 
 function drawMenuOverlay() {
   ctx.save();
-  ctx.fillStyle = "rgba(4, 10, 9, 0.55)";
+  ctx.fillStyle = "rgba(3, 8, 9, 0.62)";
   ctx.fillRect(0, 0, BOARD.w, BOARD.h);
 
-  const w = 760;
-  const h = 290;
+  const w = 820;
+  const h = 360;
   const x = (BOARD.w - w) / 2;
-  const y = 180;
+  const y = 148;
   roundRectPath(x, y, w, h, 16);
-  ctx.fillStyle = "rgba(17, 46, 39, 0.96)";
+  const panel = ctx.createLinearGradient(x, y, x, y + h);
+  panel.addColorStop(0, "rgba(14, 38, 34, 0.97)");
+  panel.addColorStop(1, "rgba(10, 28, 25, 0.97)");
+  ctx.fillStyle = panel;
   ctx.fill();
-  ctx.strokeStyle = "rgba(245, 214, 110, 0.5)";
+  ctx.strokeStyle = "rgba(245, 214, 110, 0.42)";
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
+  roundRectPath(x + 14, y + 14, w - 28, 72, 12);
+  ctx.fillStyle = "rgba(255,255,255,0.03)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(230, 246, 239, 0.08)";
+  ctx.stroke();
+
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
   ctx.fillStyle = "#f4e3a4";
-  ctx.font = '34px "APL386", monospace';
-  ctx.fillText("BINARY KLONDIKE SOLITAIRE", BOARD.w / 2, y + 58);
+  ctx.font = '16px "APL386", monospace';
+  ctx.fillText("KLONDIKE // BINARY RANKS // APL386 SUITS", x + 28, y + 28);
 
-  ctx.fillStyle = "#e8f4e7";
-  ctx.font = '18px "APL386", monospace';
-  ctx.fillText("Cards use 4-bit rank labels and bit pips.", BOARD.w / 2, y + 112);
-  ctx.fillText("Ace = 0001    ...    King = 1101 (13)", BOARD.w / 2, y + 144);
-  ctx.fillText("Click anywhere to deal a new game.", BOARD.w / 2, y + 176);
+  ctx.fillStyle = "#eef7f1";
+  ctx.font = '30px "APL386", monospace';
+  ctx.fillText("BINARY KLONDIKE", x + 28, y + 52);
 
+  const innerPad = 28;
+  const colGap = 22;
+  const leftColX = x + innerPad;
+  const leftColY = y + 104;
+  const rightY = y + 104;
+  const rightW = 264;
+  const rightH = 232;
+  const rightX = x + w - innerPad - rightW;
+  const leftColW = rightX - leftColX - colGap;
+
+  // Left text column (clipped to prevent font-metric overflow into the right panel).
+  ctx.save();
+  roundRectPath(leftColX - 4, leftColY - 4, leftColW + 8, 154, 10);
+  ctx.clip();
+
+  ctx.fillStyle = "rgba(235, 246, 239, 0.9)";
+  ctx.font = '16px "APL386", monospace';
+  let textY = fillWrappedText(
+    "Classic solitaire. Numeric ranks become 4-bit cards.",
+    leftColX,
+    leftColY,
+    leftColW,
+    20
+  );
+
+  ctx.font = '14px "APL386", monospace';
+  ctx.fillStyle = "rgba(235, 246, 239, 0.76)";
+  textY = fillWrappedText(
+    "Build foundations by suit from Ace (0001) to King (1101). Tableau builds downward in alternating colors.",
+    leftColX,
+    textY + 4,
+    leftColW,
+    18
+  );
+  fillWrappedText(
+    "Drag cards or use click-to-select, click-to-place. The stock draws one card and recycles when empty.",
+    leftColX,
+    textY + 2,
+    leftColW,
+    18
+  );
+  ctx.restore();
+
+  roundRectPath(leftColX, y + h - 92, 250, 56, 10);
+  ctx.fillStyle = "rgba(240, 210, 126, 0.12)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(240, 210, 126, 0.34)";
+  ctx.stroke();
+  ctx.fillStyle = "#f0d27e";
+  ctx.font = '14px "APL386", monospace';
+  ctx.fillText("CLICK ANYWHERE TO DEAL", leftColX + 14, y + h - 74);
+  ctx.font = '12px "APL386", monospace';
+  ctx.fillStyle = "rgba(240, 210, 126, 0.86)";
+  ctx.fillText("or press N", leftColX + 14, y + h - 54);
+
+  roundRectPath(rightX, rightY, rightW, rightH, 12);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.025)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(227, 245, 236, 0.08)";
+  ctx.stroke();
+
+  ctx.save();
+  roundRectPath(rightX + 3, rightY + 3, rightW - 6, rightH - 6, 10);
+  ctx.clip();
+
+  ctx.fillStyle = "#e9f5ee";
   ctx.font = '15px "APL386", monospace';
-  ctx.fillStyle = "rgba(232, 244, 231, 0.78)";
-  ctx.fillText(HINT_TEXT, BOARD.w / 2, y + 220);
+  ctx.fillText("RANK ENCODING", rightX + 16, rightY + 16);
+  ctx.font = '13px "APL386", monospace';
+  ctx.fillStyle = "rgba(233, 245, 238, 0.84)";
+  ctx.fillText("A  = 0001", rightX + 16, rightY + 46);
+  ctx.fillText("10 = 1010", rightX + 16, rightY + 68);
+  ctx.fillText("J  = 1011", rightX + 16, rightY + 90);
+  ctx.fillText("Q  = 1100", rightX + 16, rightY + 112);
+  ctx.fillText("K  = 1101", rightX + 16, rightY + 134);
+
+  ctx.fillStyle = "#f0d27e";
+  ctx.font = '14px "APL386", monospace';
+  ctx.fillText("CONTROLS", rightX + 16, rightY + 162);
+  ctx.fillStyle = "rgba(233, 245, 238, 0.82)";
+  ctx.font = '11px "APL386", monospace';
+  fillWrappedText(
+    "N new game  A auto move  F fullscreen  Esc clear selection",
+    rightX + 16,
+    rightY + 183,
+    rightW - 32,
+    15
+  );
+  ctx.restore();
   ctx.restore();
 }
 
@@ -965,6 +1245,7 @@ function beginDragFromSelection(selection, point) {
   const origin = selectionTopLeft(selection);
   if (!origin) return false;
   state.selected = selection;
+  state.hovered = null;
   state.drag = {
     active: true,
     pointer: { ...point },
@@ -1000,10 +1281,17 @@ function onCanvasMouseDown(event) {
 }
 
 function onWindowMouseMove(event) {
-  if (!pointerGesture.isDown || !pointerGesture.start) return;
   const point = canvasPointFromEvent(event);
 
+  if (!pointerGesture.isDown || !pointerGesture.start) {
+    if (!state.drag?.active) {
+      setHoveredCard(hoverRefFromHit(hitTest(point.x, point.y)));
+    }
+    return;
+  }
+
   if (state.drag?.active) {
+    if (state.hovered) state.hovered = null;
     state.drag.pointer = { ...point };
     render();
     return;
@@ -1040,7 +1328,7 @@ function onWindowMouseUp(event) {
 
 function tryToggleFullscreen() {
   if (!document.fullscreenElement) {
-    canvas.requestFullscreen?.().catch(() => {});
+    appShell?.requestFullscreen?.().catch(() => {});
   } else {
     document.exitFullscreen?.().catch(() => {});
   }
@@ -1139,14 +1427,25 @@ window.binaryKlondike = {
 canvas.addEventListener("mousedown", onCanvasMouseDown);
 window.addEventListener("mousemove", onWindowMouseMove);
 window.addEventListener("mouseup", onWindowMouseUp);
+window.addEventListener("resize", () => {
+  resizeCanvasPresentation();
+  render();
+});
 document.addEventListener("keydown", handleKey);
 newGameBtn.addEventListener("click", () => newGame());
 autoBtn.addEventListener("click", () => tryAutoMoveOnce());
-document.addEventListener("fullscreenchange", () => render());
+fullscreenBtn?.addEventListener("click", () => tryToggleFullscreen());
+document.addEventListener("fullscreenchange", () => {
+  updateFullscreenButtonLabel();
+  resizeCanvasPresentation();
+  render();
+});
 
 Promise.allSettled([
   document.fonts?.load?.('16px "APL386"') ?? Promise.resolve(),
 ]).finally(() => {
+  updateFullscreenButtonLabel();
+  resizeCanvasPresentation();
   const initial = getInitialOptions();
   if (initial.autostart) {
     newGame(initial.seed ?? Date.now());
