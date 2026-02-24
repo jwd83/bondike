@@ -20,3 +20,5 @@ Original prompt: review this seed prompt and build my binary solitaire app
 - Added slide-into-place card animations for stock draws and legal card moves (tableau/foundation), with easing and reduced-motion respect.
 - Updated `advanceTime(ms)` to progress animation tweens for deterministic automated captures.
 - TODO (optional): add multi-card auto-complete animation and touch/pointer-event support for mobile drag interactions.
+
+- Added canvas double-click handler to attempt moving the clicked single card (waste/top tableau) to its matching foundation while preserving prior selection on illegal attempts.

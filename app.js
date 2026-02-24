@@ -514,6 +514,21 @@ function tryAutoMoveOnce() {
   return false;
 }
 
+function tryMoveSelectionToOwnFoundation(selection) {
+  if (state.mode !== "playing" || !selection) return false;
+  const previousSelection = state.selected;
+  state.selected = selection;
+  const cards = getSelectedCards();
+  if (cards.length !== 1) {
+    state.selected = previousSelection;
+    return false;
+  }
+  const targetFoundation = foundationIndexForSuit(cards[0].suit);
+  if (moveSelectedToFoundation(targetFoundation)) return true;
+  state.selected = previousSelection;
+  return false;
+}
+
 function revealTopIfNeeded(col) {
   const pile = state.tableau[col];
   if (pile.length > 0 && !pile[pile.length - 1].faceUp) {
@@ -1501,6 +1516,14 @@ function onWindowMouseUp(event) {
   handleBoardClick(point.x, point.y);
 }
 
+function onCanvasDoubleClick(event) {
+  event.preventDefault();
+  resetPointerGesture();
+  const point = canvasPointFromEvent(event);
+  const selection = selectionFromHit(hitTest(point.x, point.y));
+  tryMoveSelectionToOwnFoundation(selection);
+}
+
 function tryToggleFullscreen() {
   if (!document.fullscreenElement) {
     appShell?.requestFullscreen?.().catch(() => {});
@@ -1602,6 +1625,7 @@ window.binaryKlondike = {
 };
 
 canvas.addEventListener("mousedown", onCanvasMouseDown);
+canvas.addEventListener("dblclick", onCanvasDoubleClick);
 window.addEventListener("mousemove", onWindowMouseMove);
 window.addEventListener("mouseup", onWindowMouseUp);
 window.addEventListener("resize", () => {
