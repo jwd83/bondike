@@ -488,6 +488,12 @@ function checkWin() {
   }
 }
 
+function clearSelection() {
+  state.selected = null;
+  state.message = "Selection cleared.";
+  render();
+}
+
 function tryAutoMoveOnce() {
   if (state.mode !== "playing") return false;
   state.selected = null;
@@ -677,11 +683,7 @@ function handleBoardClick(px, py) {
   }
   const hit = hitTest(px, py);
   if (!hit) {
-    if (state.selected) {
-      state.selected = null;
-      state.message = "Selection cleared.";
-      render();
-    }
+    if (state.selected) clearSelection();
     return;
   }
 
@@ -692,11 +694,7 @@ function handleBoardClick(px, py) {
 
   if (hit.kind === "waste") {
     if (state.selected) {
-      if (state.selected.source === "waste") {
-        state.selected = null;
-        state.message = "Selection cleared.";
-        render();
-      }
+      if (state.selected.source === "waste") clearSelection();
       return;
     }
     if (topWasteCard()) trySelectSource({ source: "waste" });
@@ -760,9 +758,7 @@ function handleBoardClick(px, py) {
         state.selected.col === hit.col &&
         state.selected.index === hit.index;
       if (sameSource) {
-        state.selected = null;
-        state.message = "Selection cleared.";
-        render();
+        clearSelection();
         return;
       }
       if (!moveSelectedToTableau(hit.col)) {
@@ -793,16 +789,7 @@ function canvasPointFromEvent(event) {
 
 function roundRectPath(x, y, w, h, r) {
   ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
+  ctx.roundRect(x, y, w, h, r);
 }
 
 function fillWrappedText(text, x, y, maxWidth, lineHeight) {
@@ -878,8 +865,6 @@ function drawCardBitsPips(bits, x, y, color) {
       ctx.fillStyle = color;
       ctx.fill();
     } else {
-      ctx.fillStyle = "rgba(0,0,0,0)";
-      ctx.fill();
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = "rgba(20, 52, 45, 0.45)";
       ctx.stroke();
@@ -983,13 +968,10 @@ function selectionTopLeft(selection) {
 
 function captureSelectedCardPositions() {
   if (!state.selected) return [];
-  if (state.selected.source === "waste") {
-    const card = topWasteCard();
-    const origin = selectionTopLeft(state.selected);
-    return card && origin ? [{ card, x: origin.x, y: origin.y, faceUp: true }] : [];
-  }
-  if (state.selected.source === "foundation") {
-    const card = topFoundationCard(state.selected.foundation);
+  if (state.selected.source === "waste" || state.selected.source === "foundation") {
+    const card = state.selected.source === "waste"
+      ? topWasteCard()
+      : topFoundationCard(state.selected.foundation);
     const origin = selectionTopLeft(state.selected);
     return card && origin ? [{ card, x: origin.x, y: origin.y, faceUp: true }] : [];
   }
@@ -1064,24 +1046,26 @@ function drawDragPreview() {
 }
 
 function drawBoardBackground() {
+  function fillBoard() { ctx.fillRect(0, 0, BOARD.w, BOARD.h); }
+
   const base = ctx.createLinearGradient(0, 0, 0, BOARD.h);
   base.addColorStop(0, "#1b6a57");
   base.addColorStop(0.42, "#145244");
   base.addColorStop(1, "#0a2f2a");
   ctx.fillStyle = base;
-  ctx.fillRect(0, 0, BOARD.w, BOARD.h);
+  fillBoard();
 
   const glowA = ctx.createRadialGradient(120, 110, 20, 120, 110, 320);
   glowA.addColorStop(0, "rgba(245, 214, 110, 0.16)");
   glowA.addColorStop(1, "rgba(245, 214, 110, 0)");
   ctx.fillStyle = glowA;
-  ctx.fillRect(0, 0, BOARD.w, BOARD.h);
+  fillBoard();
 
   const glowB = ctx.createRadialGradient(1020, 120, 20, 1020, 120, 340);
   glowB.addColorStop(0, "rgba(114, 210, 188, 0.14)");
   glowB.addColorStop(1, "rgba(114, 210, 188, 0)");
   ctx.fillStyle = glowB;
-  ctx.fillRect(0, 0, BOARD.w, BOARD.h);
+  fillBoard();
 
   ctx.save();
   ctx.globalAlpha = 0.065;
@@ -1122,7 +1106,7 @@ function drawBoardBackground() {
   vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
   vignette.addColorStop(1, "rgba(0, 0, 0, 0.22)");
   ctx.fillStyle = vignette;
-  ctx.fillRect(0, 0, BOARD.w, BOARD.h);
+  fillBoard();
 }
 
 function drawHeader() {
@@ -1175,47 +1159,25 @@ function drawTopRow() {
   }
 
   if (state.stock.length > 0) {
-    drawFaceDownCard(
-      stockRect.x,
-      stockRect.y,
-      state.selected && state.selected.source === "stock"
-    );
+    drawFaceDownCard(stockRect.x, stockRect.y, state.selected?.source === "stock");
   }
 
   const waste = topWasteCard();
   if (waste) {
-    const wasteSelected = state.selected && state.selected.source === "waste";
-    const wasteHovered = state.hovered && state.hovered.source === "waste";
+    const sel = state.selected?.source === "waste";
+    const hov = state.hovered?.source === "waste";
     if (!isCardAnimating(waste.id)) {
-      drawFaceUpCard(
-        waste,
-        wasteRect.x,
-        wasteRect.y,
-        wasteSelected,
-        wasteSelected || wasteHovered
-      );
+      drawFaceUpCard(waste, wasteRect.x, wasteRect.y, sel, sel || hov);
     }
   }
 
   for (let i = 0; i < 4; i += 1) {
     const card = topFoundationCard(i);
     if (card) {
-      const foundationSelected =
-        state.selected &&
-        state.selected.source === "foundation" &&
-        state.selected.foundation === i;
-      const foundationHovered =
-        state.hovered &&
-        state.hovered.source === "foundation" &&
-        state.hovered.foundation === i;
+      const sel = state.selected?.source === "foundation" && state.selected.foundation === i;
+      const hov = state.hovered?.source === "foundation" && state.hovered.foundation === i;
       if (!isCardAnimating(card.id)) {
-        drawFaceUpCard(
-          card,
-          foundations[i].x,
-          foundations[i].y,
-          foundationSelected,
-          foundationSelected || foundationHovered
-        );
+        drawFaceUpCard(card, foundations[i].x, foundations[i].y, sel, sel || hov);
       }
     }
   }
@@ -1532,28 +1494,19 @@ function tryToggleFullscreen() {
   }
 }
 
+const KEY_ACTIONS = { n: newGame, a: tryAutoMoveOnce, f: tryToggleFullscreen };
+
 function handleKey(event) {
-  if (event.key === "n" || event.key === "N") {
-    newGame();
-    return;
-  }
-  if (event.key === "a" || event.key === "A") {
-    tryAutoMoveOnce();
-    return;
-  }
-  if (event.key === "f" || event.key === "F") {
-    tryToggleFullscreen();
-    return;
-  }
+  const action = KEY_ACTIONS[event.key.toLowerCase()];
+  if (action) { action(); return; }
   if (event.key === "Escape" && state.selected) {
-    state.selected = null;
     state.drag = null;
-    state.message = "Selection cleared.";
-    render();
+    clearSelection();
   }
 }
 
 function renderGameToText() {
+  const waste = topWasteCard();
   const payload = {
     mode: state.mode,
     coordinateSystem: {
@@ -1563,12 +1516,8 @@ function renderGameToText() {
       canvas: { width: BOARD.w, height: BOARD.h },
     },
     stockCount: state.stock.length,
-    wasteTop: topWasteCard()
-      ? {
-          suit: topWasteCard().suit,
-          rank: topWasteCard().rank,
-          bits: cardBits(topWasteCard().rank),
-        }
+    wasteTop: waste
+      ? { suit: waste.suit, rank: waste.rank, bits: cardBits(waste.rank) }
       : null,
     foundations: state.foundations.map((pile, i) => ({
       index: i,
