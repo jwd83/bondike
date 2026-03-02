@@ -5,7 +5,6 @@ const canvasStage = document.querySelector(".canvas-stage");
 const toolbarEl = document.querySelector(".toolbar");
 const newGameBtn = document.getElementById("new-game-btn");
 const autoBtn = document.getElementById("auto-btn");
-const safeAutoBtn = document.getElementById("safe-auto-btn");
 const fullscreenBtn = document.getElementById("fullscreen-btn");
 
 const BOARD = { w: canvas.width, h: canvas.height };
@@ -28,7 +27,7 @@ const SUIT_GLYPHS = {
 const FOUNDATION_ORDER = ["clubs", "diamonds", "hearts", "spades"];
 const RED_SUITS = new Set(["hearts", "diamonds"]);
 const HINT_TEXT =
-  "Click or drag to move cards. Stock draws, empty stock recycles. N=new, A=auto once, S=safe auto-complete, F=fullscreen.";
+  "Click or drag to move cards. Stock draws, empty stock recycles. N=new, A=auto, F=fullscreen.";
 const TOP_FOUNDATION_GROUP_X = LEFT + (CARD.w + COL_GAP) * 3 + 20;
 
 const state = {
@@ -198,10 +197,10 @@ function updateFullscreenButtonLabel() {
   fullscreenBtn.textContent = isAppFullscreen() ? "Exit Fullscreen" : "Fullscreen";
 }
 
-function updateSafeAutoButtonState() {
-  if (!safeAutoBtn) return;
-  safeAutoBtn.disabled = state.autoCompleting;
-  safeAutoBtn.textContent = state.autoCompleting ? "Auto-Completing..." : "Auto-Complete Safe";
+function updateAutoButtonState() {
+  if (!autoBtn) return;
+  autoBtn.disabled = state.autoCompleting;
+  autoBtn.textContent = state.autoCompleting ? "Auto..." : "Auto";
 }
 
 function waitMs(ms) {
@@ -274,7 +273,7 @@ function newGame(seed = Date.now()) {
     }
   }
   state.stock = deck;
-  updateSafeAutoButtonState();
+  updateAutoButtonState();
   render();
 }
 
@@ -534,71 +533,29 @@ function tryAutoMoveOnce() {
   return false;
 }
 
-function foundationTopRankForSuit(suit) {
-  const i = foundationIndexForSuit(suit);
-  const top = topFoundationCard(i);
-  return top?.rank ?? 0;
-}
-
-function isSafeAutoFoundationMove(card) {
-  if (!card) return false;
-  // Conservative Klondike heuristic:
-  // Always safe for A/2. For higher ranks, only advance when both opposite-color
-  // foundations are at least rank-1, so we don't strand needed tableau links.
-  if (card.rank <= 2) return true;
-  const oppositeSuits = FOUNDATION_ORDER.filter(
-    (suit) => RED_SUITS.has(suit) !== RED_SUITS.has(card.suit),
-  );
-  return oppositeSuits.every((suit) => foundationTopRankForSuit(suit) >= card.rank - 1);
-}
-
-async function tryAutoCompleteSafeFoundations() {
+async function tryAutoCompleteFoundations() {
   if (state.mode !== "playing" || state.autoCompleting) return 0;
   state.autoCompleting = true;
-  updateSafeAutoButtonState();
+  updateAutoButtonState();
 
   const maxMoves = 52;
   let moves = 0;
   const cadenceMs = animationState.prefersReducedMotion ? 0 : 95;
 
   while (moves < maxMoves) {
-    const waste = topWasteCard();
-    if (waste && isSafeAutoFoundationMove(waste)) {
-      state.selected = { source: "waste" };
-      const f = foundationIndexForSuit(waste.suit);
-      if (moveSelectedToFoundation(f)) {
-        moves += 1;
-        if (cadenceMs > 0) await waitMs(cadenceMs);
-        continue;
-      }
-      state.selected = null;
-    }
-
-    let movedFromTableau = false;
-    for (let col = 0; col < 7; col += 1) {
-      const top = topTableauEntry(col);
-      if (!top || !top.faceUp || !isSafeAutoFoundationMove(top.card)) continue;
-      state.selected = { source: "tableau", col, index: state.tableau[col].length - 1 };
-      const f = foundationIndexForSuit(top.card.suit);
-      if (moveSelectedToFoundation(f)) {
-        moves += 1;
-        movedFromTableau = true;
-        if (cadenceMs > 0) await waitMs(cadenceMs);
-        break;
-      }
-      state.selected = null;
-    }
-
-    if (!movedFromTableau) break;
+    const moved = tryAutoMoveOnce();
+    if (!moved) break;
+    moves += 1;
+    if (cadenceMs > 0) await waitMs(cadenceMs);
   }
 
   state.autoCompleting = false;
-  updateSafeAutoButtonState();
+  updateAutoButtonState();
 
   if (moves === 0) {
-    state.message = "No safe auto-foundation moves available.";
+    state.message = "No auto-foundation moves available.";
   } else {
-    state.message = `Auto-completed ${moves} safe foundation move${moves === 1 ? "" : "s"}.`;
+    state.message = `Auto-completed ${moves} foundation move${moves === 1 ? "" : "s"}.`;
   }
   render();
   return moves;
@@ -1425,7 +1382,7 @@ function drawMenuOverlay() {
   ctx.fillStyle = "rgba(233, 245, 238, 0.82)";
   ctx.font = '11px "APL386", monospace';
   fillWrappedText(
-    "N new game  A auto move  S safe auto-complete  F fullscreen  Esc clear selection",
+    "N new game  A auto  F fullscreen  Esc clear selection",
     rightX + 16,
     rightY + 183,
     rightW - 32,
@@ -1599,8 +1556,7 @@ function tryToggleFullscreen() {
 
 const KEY_ACTIONS = {
   n: newGame,
-  a: tryAutoMoveOnce,
-  s: tryAutoCompleteSafeFoundations,
+  a: tryAutoCompleteFoundations,
   f: tryToggleFullscreen,
 };
 
@@ -1679,7 +1635,7 @@ window.binaryKlondike = {
   newGame,
   state,
   tryAutoMoveOnce,
-  tryAutoCompleteSafeFoundations,
+  tryAutoCompleteFoundations,
 };
 
 canvas.addEventListener("pointerdown", onCanvasPointerDown);
@@ -1699,8 +1655,7 @@ window.addEventListener("resize", () => {
 });
 document.addEventListener("keydown", handleKey);
 newGameBtn.addEventListener("click", () => newGame());
-autoBtn.addEventListener("click", () => tryAutoMoveOnce());
-safeAutoBtn?.addEventListener("click", () => tryAutoCompleteSafeFoundations());
+autoBtn.addEventListener("click", () => tryAutoCompleteFoundations());
 fullscreenBtn?.addEventListener("click", () => tryToggleFullscreen());
 document.addEventListener("fullscreenchange", () => {
   updateFullscreenButtonLabel();
@@ -1712,7 +1667,7 @@ Promise.allSettled([
   document.fonts?.load?.('16px "APL386"') ?? Promise.resolve(),
 ]).finally(() => {
   updateFullscreenButtonLabel();
-  updateSafeAutoButtonState();
+  updateAutoButtonState();
   resizeCanvasPresentation();
   const initial = getInitialOptions();
   if (initial.autostart) {
