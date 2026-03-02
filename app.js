@@ -1451,6 +1451,7 @@ function screenToCanvasClick(event) {
 
 const pointerGesture = {
   isDown: false,
+  pointerId: null,
   start: null,
   startHit: null,
   dragStarted: false,
@@ -1487,19 +1488,26 @@ function finishDrag(point) {
   }
 }
 
-function onCanvasMouseDown(event) {
+function onCanvasPointerDown(event) {
   event.preventDefault();
+  if (pointerGesture.isDown) return;
   pointerGesture.isDown = true;
+  pointerGesture.pointerId = event.pointerId ?? null;
+  canvas.setPointerCapture?.(event.pointerId);
   pointerGesture.start = canvasPointFromEvent(event);
   pointerGesture.startHit = hitTest(pointerGesture.start.x, pointerGesture.start.y);
   pointerGesture.dragStarted = false;
 }
 
-function onWindowMouseMove(event) {
+function onWindowPointerMove(event) {
+  if (pointerGesture.isDown && pointerGesture.pointerId != null && event.pointerId !== pointerGesture.pointerId) {
+    return;
+  }
+
   const point = canvasPointFromEvent(event);
 
   if (!pointerGesture.isDown || !pointerGesture.start) {
-    if (!state.drag?.active) {
+    if (!state.drag?.active && event.pointerType !== "touch") {
       setHoveredCard(hoverRefFromHit(hitTest(point.x, point.y)));
     }
     return;
@@ -1523,15 +1531,18 @@ function onWindowMouseMove(event) {
 
 function resetPointerGesture() {
   pointerGesture.isDown = false;
+  pointerGesture.pointerId = null;
   pointerGesture.start = null;
   pointerGesture.startHit = null;
   pointerGesture.dragStarted = false;
 }
 
-function onWindowMouseUp(event) {
+function onWindowPointerUp(event) {
   if (!pointerGesture.isDown) return;
+  if (pointerGesture.pointerId != null && event.pointerId !== pointerGesture.pointerId) return;
   const point = canvasPointFromEvent(event);
   const didDrag = pointerGesture.dragStarted || !!state.drag?.active;
+  try { canvas.releasePointerCapture?.(event.pointerId); } catch {}
   resetPointerGesture();
 
   if (didDrag) {
@@ -1539,6 +1550,14 @@ function onWindowMouseUp(event) {
     return;
   }
   handleBoardClick(point.x, point.y);
+}
+
+function onWindowPointerCancel(event) {
+  if (!pointerGesture.isDown) return;
+  if (pointerGesture.pointerId != null && event.pointerId !== pointerGesture.pointerId) return;
+  state.drag = null;
+  resetPointerGesture();
+  render();
 }
 
 function onCanvasDoubleClick(event) {
@@ -1642,10 +1661,17 @@ window.binaryKlondike = {
   tryAutoCompleteSafeFoundations,
 };
 
-canvas.addEventListener("mousedown", onCanvasMouseDown);
+canvas.addEventListener("pointerdown", onCanvasPointerDown);
 canvas.addEventListener("dblclick", onCanvasDoubleClick);
-window.addEventListener("mousemove", onWindowMouseMove);
-window.addEventListener("mouseup", onWindowMouseUp);
+window.addEventListener("pointermove", onWindowPointerMove);
+window.addEventListener("pointerup", onWindowPointerUp);
+window.addEventListener("pointercancel", onWindowPointerCancel);
+canvas.addEventListener("lostpointercapture", () => {
+  if (!pointerGesture.isDown) return;
+  state.drag = null;
+  resetPointerGesture();
+  render();
+});
 window.addEventListener("resize", () => {
   resizeCanvasPresentation();
   render();
