@@ -5,6 +5,7 @@ const canvasStage = document.querySelector(".canvas-stage");
 const toolbarEl = document.querySelector(".toolbar");
 const newGameBtn = document.getElementById("new-game-btn");
 const autoBtn = document.getElementById("auto-btn");
+const safeAutoBtn = document.getElementById("safe-auto-btn");
 const fullscreenBtn = document.getElementById("fullscreen-btn");
 
 const BOARD = { w: canvas.width, h: canvas.height };
@@ -27,7 +28,7 @@ const SUIT_GLYPHS = {
 const FOUNDATION_ORDER = ["clubs", "diamonds", "hearts", "spades"];
 const RED_SUITS = new Set(["hearts", "diamonds"]);
 const HINT_TEXT =
-  "Click or drag to move cards. Stock draws, empty stock recycles. N=new, A=auto, F=fullscreen.";
+  "Click or drag to move cards. Stock draws, empty stock recycles. N=new, A=auto once, S=safe auto-complete, F=fullscreen.";
 const TOP_FOUNDATION_GROUP_X = LEFT + (CARD.w + COL_GAP) * 3 + 20;
 
 const state = {
@@ -518,6 +519,68 @@ function tryAutoMoveOnce() {
   state.message = "No eligible auto-move to foundation.";
   render();
   return false;
+}
+
+function foundationTopRankForSuit(suit) {
+  const i = foundationIndexForSuit(suit);
+  const top = topFoundationCard(i);
+  return top?.rank ?? 0;
+}
+
+function isSafeAutoFoundationMove(card) {
+  if (!card) return false;
+  // Conservative Klondike heuristic:
+  // Always safe for A/2. For higher ranks, only advance when both opposite-color
+  // foundations are at least rank-1, so we don't strand needed tableau links.
+  if (card.rank <= 2) return true;
+  const oppositeSuits = FOUNDATION_ORDER.filter(
+    (suit) => RED_SUITS.has(suit) !== RED_SUITS.has(card.suit),
+  );
+  return oppositeSuits.every((suit) => foundationTopRankForSuit(suit) >= card.rank - 1);
+}
+
+function tryAutoCompleteSafeFoundations() {
+  if (state.mode !== "playing") return 0;
+  const maxMoves = 52;
+  let moves = 0;
+
+  while (moves < maxMoves) {
+    const waste = topWasteCard();
+    if (waste && isSafeAutoFoundationMove(waste)) {
+      state.selected = { source: "waste" };
+      const f = foundationIndexForSuit(waste.suit);
+      if (moveSelectedToFoundation(f)) {
+        moves += 1;
+        continue;
+      }
+      state.selected = null;
+    }
+
+    let movedFromTableau = false;
+    for (let col = 0; col < 7; col += 1) {
+      const top = topTableauEntry(col);
+      if (!top || !top.faceUp || !isSafeAutoFoundationMove(top.card)) continue;
+      state.selected = { source: "tableau", col, index: state.tableau[col].length - 1 };
+      const f = foundationIndexForSuit(top.card.suit);
+      if (moveSelectedToFoundation(f)) {
+        moves += 1;
+        movedFromTableau = true;
+        break;
+      }
+      state.selected = null;
+    }
+
+    if (!movedFromTableau) break;
+  }
+
+  if (moves === 0) {
+    state.message = "No safe auto-foundation moves available.";
+    render();
+  } else {
+    state.message = `Auto-completed ${moves} safe foundation move${moves === 1 ? "" : "s"}.`;
+    render();
+  }
+  return moves;
 }
 
 function tryMoveSelectionToOwnFoundation(selection) {
@@ -1341,7 +1404,7 @@ function drawMenuOverlay() {
   ctx.fillStyle = "rgba(233, 245, 238, 0.82)";
   ctx.font = '11px "APL386", monospace';
   fillWrappedText(
-    "N new game  A auto move  F fullscreen  Esc clear selection",
+    "N new game  A auto move  S safe auto-complete  F fullscreen  Esc clear selection",
     rightX + 16,
     rightY + 183,
     rightW - 32,
@@ -1494,7 +1557,12 @@ function tryToggleFullscreen() {
   }
 }
 
-const KEY_ACTIONS = { n: newGame, a: tryAutoMoveOnce, f: tryToggleFullscreen };
+const KEY_ACTIONS = {
+  n: newGame,
+  a: tryAutoMoveOnce,
+  s: tryAutoCompleteSafeFoundations,
+  f: tryToggleFullscreen,
+};
 
 function handleKey(event) {
   const action = KEY_ACTIONS[event.key.toLowerCase()];
@@ -1571,6 +1639,7 @@ window.binaryKlondike = {
   newGame,
   state,
   tryAutoMoveOnce,
+  tryAutoCompleteSafeFoundations,
 };
 
 canvas.addEventListener("mousedown", onCanvasMouseDown);
@@ -1584,6 +1653,7 @@ window.addEventListener("resize", () => {
 document.addEventListener("keydown", handleKey);
 newGameBtn.addEventListener("click", () => newGame());
 autoBtn.addEventListener("click", () => tryAutoMoveOnce());
+safeAutoBtn?.addEventListener("click", () => tryAutoCompleteSafeFoundations());
 fullscreenBtn?.addEventListener("click", () => tryToggleFullscreen());
 document.addEventListener("fullscreenchange", () => {
   updateFullscreenButtonLabel();
