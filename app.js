@@ -35,7 +35,7 @@ const state = {
   mode: "menu",
   stock: [],
   waste: [],
-  foundations: [[], [], [], []],
+  foundations: [[], [], [], [],],
   tableau: [[], [], [], [], [], [], []],
   selected: null,
   moves: 0,
@@ -46,6 +46,7 @@ const state = {
   wonAt: null,
   drag: null,
   hovered: null,
+  autoCompleting: false,
 };
 
 const animationState = {
@@ -197,6 +198,16 @@ function updateFullscreenButtonLabel() {
   fullscreenBtn.textContent = isAppFullscreen() ? "Exit Fullscreen" : "Fullscreen";
 }
 
+function updateSafeAutoButtonState() {
+  if (!safeAutoBtn) return;
+  safeAutoBtn.disabled = state.autoCompleting;
+  safeAutoBtn.textContent = state.autoCompleting ? "Auto-Completing..." : "Auto-Complete Safe";
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function mulberry32(seed) {
   let t = seed >>> 0;
   return () => {
@@ -248,6 +259,7 @@ function newGame(seed = Date.now()) {
   state.selected = null;
   state.drag = null;
   state.hovered = null;
+  state.autoCompleting = false;
   state.moves = 0;
   state.score = 0;
   state.mode = "playing";
@@ -262,6 +274,7 @@ function newGame(seed = Date.now()) {
     }
   }
   state.stock = deck;
+  updateSafeAutoButtonState();
   render();
 }
 
@@ -539,10 +552,14 @@ function isSafeAutoFoundationMove(card) {
   return oppositeSuits.every((suit) => foundationTopRankForSuit(suit) >= card.rank - 1);
 }
 
-function tryAutoCompleteSafeFoundations() {
-  if (state.mode !== "playing") return 0;
+async function tryAutoCompleteSafeFoundations() {
+  if (state.mode !== "playing" || state.autoCompleting) return 0;
+  state.autoCompleting = true;
+  updateSafeAutoButtonState();
+
   const maxMoves = 52;
   let moves = 0;
+  const cadenceMs = animationState.prefersReducedMotion ? 0 : 95;
 
   while (moves < maxMoves) {
     const waste = topWasteCard();
@@ -551,6 +568,7 @@ function tryAutoCompleteSafeFoundations() {
       const f = foundationIndexForSuit(waste.suit);
       if (moveSelectedToFoundation(f)) {
         moves += 1;
+        if (cadenceMs > 0) await waitMs(cadenceMs);
         continue;
       }
       state.selected = null;
@@ -565,6 +583,7 @@ function tryAutoCompleteSafeFoundations() {
       if (moveSelectedToFoundation(f)) {
         moves += 1;
         movedFromTableau = true;
+        if (cadenceMs > 0) await waitMs(cadenceMs);
         break;
       }
       state.selected = null;
@@ -573,13 +592,15 @@ function tryAutoCompleteSafeFoundations() {
     if (!movedFromTableau) break;
   }
 
+  state.autoCompleting = false;
+  updateSafeAutoButtonState();
+
   if (moves === 0) {
     state.message = "No safe auto-foundation moves available.";
-    render();
   } else {
     state.message = `Auto-completed ${moves} safe foundation move${moves === 1 ? "" : "s"}.`;
-    render();
   }
+  render();
   return moves;
 }
 
@@ -1691,6 +1712,7 @@ Promise.allSettled([
   document.fonts?.load?.('16px "APL386"') ?? Promise.resolve(),
 ]).finally(() => {
   updateFullscreenButtonLabel();
+  updateSafeAutoButtonState();
   resizeCanvasPresentation();
   const initial = getInitialOptions();
   if (initial.autostart) {
